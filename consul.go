@@ -42,9 +42,9 @@ type ConsulUpstreams struct {
 
 // Locality controls local-node preference.
 type Locality struct {
-	NodeMetaKey      string `json:"node_meta,omitempty"`
-	MinimumPreferred int    `json:"minimum,omitempty"`
-	localValue       string
+	NodeMetaKey string `json:"node_meta,omitempty"`
+	Minimum     int    `json:"minimum,omitempty"`
+	localValue  string
 }
 
 type consulClient interface {
@@ -149,10 +149,10 @@ func (u *ConsulUpstreams) Validate() error {
 		if strings.TrimSpace(u.Locality.NodeMetaKey) == "" {
 			return errors.New("locality.node_meta is required")
 		}
-		if u.Locality.MinimumPreferred == 0 {
-			u.Locality.MinimumPreferred = 2
+		if u.Locality.Minimum == 0 {
+			u.Locality.Minimum = 2
 		}
-		if u.Locality.MinimumPreferred < 1 {
+		if u.Locality.Minimum < 1 {
 			return errors.New("locality.minimum must be at least one")
 		}
 	}
@@ -228,7 +228,7 @@ func (u *ConsulUpstreams) selectTier(snapshot snapshot) (string, []string) {
 	if u.Locality == nil {
 		return "all", snapshot.all
 	}
-	if len(snapshot.local) >= u.Locality.MinimumPreferred {
+	if len(snapshot.local) >= u.Locality.Minimum {
 		return "local", snapshot.local
 	}
 	return "all", snapshot.all
@@ -364,7 +364,7 @@ func (u *ConsulUpstreams) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if err != nil {
 						return d.Errf("invalid locality minimum: %v", err)
 					}
-					u.Locality.MinimumPreferred = minimum
+					u.Locality.Minimum = minimum
 					if d.NextArg() {
 						return d.ArgErr()
 					}

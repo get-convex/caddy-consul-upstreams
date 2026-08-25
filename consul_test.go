@@ -84,7 +84,7 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	}`)); err != nil {
 		t.Fatal(err)
 	}
-	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.MinimumPreferred != 2 {
+	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.Minimum != 2 {
 		t.Fatalf("unexpected defaults: %#v", u)
 	}
 	if err := (&ConsulUpstreams{}).Validate(); err == nil {
@@ -93,7 +93,7 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	if err := (&ConsulUpstreams{Service: "x", Refresh: -1}).Validate(); err == nil {
 		t.Fatal("negative refresh accepted")
 	}
-	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az", MinimumPreferred: -1}}).Validate(); err == nil {
+	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az", Minimum: -1}}).Validate(); err == nil {
 		t.Fatal("invalid locality minimum accepted")
 	}
 }
@@ -226,7 +226,7 @@ func TestLocalitySelectionRefreshesOnReset(t *testing.T) {
 		instance("10.0.2.1", "", 80, map[string]string{"az": "c"}),
 	}}
 	u := testModule(f)
-	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", MinimumPreferred: 2}
+	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", Minimum: 2}
 	r := request("usher")
 	got, err := u.GetUpstreams(r)
 	if err != nil || len(got) != 2 || tier(r) != "local" {
