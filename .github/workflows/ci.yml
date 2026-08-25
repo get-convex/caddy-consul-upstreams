@@ -8,18 +8,96 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.26"
+  CADDY_VERSION: v2.11.4
+  XCADDY_VERSION: v0.4.7
+
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26"
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test -race ./...
-      - run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7
-      - run: xcaddy build v2.11.4 --with github.com/get-convex/caddy-consul-upstreams=.
-      - run: ./caddy list-modules | grep -Fx http.reverse_proxy.upstreams.consul
-      - run: ./caddy adapt --config testdata/Caddyfile --adapter caddyfile
+          go-version: ${{ env.GO_VERSION }}
+          # Each job caches a different set of build artifacts. setup-go keys its
+          # cache on go.sum alone, so all three jobs would share one key and the
+          # first job to finish would overwrite the others. Key them separately.
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-lint-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-lint-${{ runner.os }}-${{ env.GO_VERSION }}-
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go vet
+        run: go vet ./...
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ env.GO_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-test-${{ runner.os }}-${{ env.GO_VERSION }}-
+      - name: go test
+        run: go test -race ./...
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      # xcaddy builds Caddy in a temporary module, so the Caddy dependency tree
+      # is not covered by go.sum. Put the pinned versions in the key.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-${{ runner.os }}-${{ env.GO_VERSION }}-${{ env.XCADDY_VERSION }}-${{ env.CADDY_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-build-${{ runner.os }}-${{ env.GO_VERSION }}-${{ env.XCADDY_VERSION }}-${{ env.CADDY_VERSION }}-
+      - name: Install xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@${{ env.XCADDY_VERSION }}
+      - name: Build Caddy with this module
+        run: xcaddy build ${{ env.CADDY_VERSION }} --with github.com/get-convex/caddy-consul-upstreams=.
+      - name: Module is registered
+        run: ./caddy list-modules | grep -Fx http.reverse_proxy.upstreams.consul
+      - name: Caddyfile adapts
+        run: ./caddy adapt --config testdata/Caddyfile --adapter caddyfile
