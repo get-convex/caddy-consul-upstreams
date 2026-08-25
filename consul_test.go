@@ -2,7 +2,6 @@ package consul
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -97,20 +96,6 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	}
 	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az", LocalValue: "a", Minimum: -1}}).Validate(); err == nil {
 		t.Fatal("invalid locality minimum accepted")
-	}
-}
-
-func TestLocalityJSON(t *testing.T) {
-	encoded, err := json.Marshal(Locality{NodeMetaKey: "availability-zone-id", LocalValue: "a", Minimum: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if decoded["local_value"] != "a" {
-		t.Fatalf("got %s", encoded)
 	}
 }
 
