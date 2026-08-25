@@ -98,17 +98,16 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	}
 }
 
-func TestAPINodeMetaReadsConfig(t *testing.T) {
+func TestConsulClientUsesAddressSchemeAndPrefix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/agent/self" {
+		if r.URL.Path != "/prefix/v1/agent/self" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 		_, _ = w.Write([]byte(`{"Config":{"NodeMeta":{"availability-zone-id":"a"}},"Member":{"Tags":{"availability-zone-id":"wrong"}}}`))
 	}))
 	defer server.Close()
-	config := api.DefaultConfig()
-	config.Address = server.Listener.Addr().String()
-	client, err := api.NewClient(config)
+	t.Setenv("CONSUL_HTTP_SSL", "true")
+	client, err := newConsulClient(server.URL+"/prefix", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +117,25 @@ func TestAPINodeMetaReadsConfig(t *testing.T) {
 	}
 	if meta["availability-zone-id"] != "a" {
 		t.Fatalf("got %#v", meta)
+	}
+}
+
+func TestConsulClientTimeoutBoundsCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client, err := newConsulClient(server.URL, 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := (apiClient{client}).NodeMeta(); err == nil || time.Since(start) > time.Second {
+		t.Fatalf("Agent.Self was not bounded: %v", err)
+	}
+	start = time.Now()
+	if _, err := (apiClient{client}).Service(context.Background(), "api"); err == nil || time.Since(start) > time.Second {
+		t.Fatalf("Health.Service was not bounded: %v", err)
 	}
 }
 
@@ -177,7 +195,7 @@ func TestCacheRefreshResetGraceAndEmpty(t *testing.T) {
 	}
 
 	u.mu.Lock()
-	u.entries["api"] = cacheEntry{snapshot: snapshot{}, freshness: time.Now().Add(-time.Hour), hasResult: true}
+	u.entries["api"] = cacheEntry{snapshot: snapshot{}, freshness: time.Now().Add(-time.Hour)}
 	u.mu.Unlock()
 	f.set(nil, nil)
 	got, err = u.GetUpstreams(r)
@@ -186,7 +204,7 @@ func TestCacheRefreshResetGraceAndEmpty(t *testing.T) {
 	}
 
 	u.mu.Lock()
-	u.entries["api"] = cacheEntry{snapshot: snapshot{all: []string{"10.0.0.1:80"}}, freshness: time.Now().Add(-time.Hour), hasResult: true}
+	u.entries["api"] = cacheEntry{snapshot: snapshot{all: []string{"10.0.0.1:80"}}, freshness: time.Now().Add(-time.Hour)}
 	u.mu.Unlock()
 	f.set(nil, errors.New("unavailable"))
 	got, err = u.GetUpstreams(r)

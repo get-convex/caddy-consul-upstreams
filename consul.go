@@ -24,6 +24,7 @@ import (
 const (
 	moduleID        = "http.reverse_proxy.upstreams.consul"
 	tierPlaceholder = "http.reverse_proxy.upstreams.consul.tier"
+	consulTimeout   = 5 * time.Second
 )
 
 // ConsulUpstreams discovers passing service instances through Consul.
@@ -90,7 +91,6 @@ func (a apiClient) Service(ctx context.Context, service string) ([]*api.ServiceE
 type cacheEntry struct {
 	snapshot  snapshot
 	freshness time.Time
-	hasResult bool
 }
 
 type snapshot struct{ all, local []string }
@@ -108,12 +108,7 @@ func (u *ConsulUpstreams) Provision(ctx caddy.Context) error {
 	u.logger = ctx.Logger()
 	u.entries = make(map[string]cacheEntry)
 	if u.client == nil {
-		config := api.DefaultConfig()
-		config.Address = strings.TrimPrefix(strings.TrimPrefix(u.Address, "http://"), "https://")
-		if strings.HasPrefix(u.Address, "https://") {
-			config.Scheme = "https"
-		}
-		client, err := api.NewClient(config)
+		client, err := newConsulClient(u.Address, consulTimeout)
 		if err != nil {
 			return fmt.Errorf("creating Consul client: %w", err)
 		}
@@ -130,6 +125,22 @@ func (u *ConsulUpstreams) Provision(ctx caddy.Context) error {
 		}
 	}
 	return nil
+}
+
+func newConsulClient(address string, timeout time.Duration) (*api.Client, error) {
+	config := api.DefaultConfig()
+	config.Address = address
+	if strings.HasPrefix(address, "http://") {
+		config.Scheme = "http"
+	} else if strings.HasPrefix(address, "https://") {
+		config.Scheme = "https"
+	}
+	client, err := api.NewClient(config)
+	if err != nil {
+		return nil, err
+	}
+	config.HttpClient.Timeout = timeout
+	return client, nil
 }
 
 func (u *ConsulUpstreams) Validate() error {
@@ -185,13 +196,13 @@ func (u *ConsulUpstreams) refresh(ctx context.Context, service string) (cacheEnt
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	entry := u.entries[service]
-	if entry.hasResult && entry.isFresh(u.Refresh) {
+	entry, ok := u.entries[service]
+	if ok && entry.isFresh(u.Refresh) {
 		return entry, nil
 	}
 	entries, err := u.client.Service(ctx, service)
 	if err != nil {
-		if entry.hasResult && u.GracePeriod > 0 {
+		if ok && u.GracePeriod > 0 {
 			if u.logger != nil {
 				u.logger.Warn("Consul upstream refresh failed; using cached snapshot", zap.String("service", service), zap.Error(err))
 			}
@@ -202,7 +213,7 @@ func (u *ConsulUpstreams) refresh(ctx context.Context, service string) (cacheEnt
 		return cacheEntry{}, fmt.Errorf("refreshing Consul service %q: %w", service, err)
 	}
 
-	if !entry.hasResult && len(u.entries) >= 100 {
+	if !ok && len(u.entries) >= 100 {
 		var evicted string
 		for key := range u.entries {
 			if evicted == "" || key < evicted {
@@ -214,14 +225,13 @@ func (u *ConsulUpstreams) refresh(ctx context.Context, service string) (cacheEnt
 	entry = cacheEntry{
 		snapshot:  u.makeSnapshot(entries),
 		freshness: time.Now(),
-		hasResult: true,
 	}
 	u.entries[service] = entry
 	return entry, nil
 }
 
 func (entry cacheEntry) isFresh(refresh caddy.Duration) bool {
-	return entry.hasResult && time.Since(entry.freshness) < time.Duration(refresh)
+	return time.Since(entry.freshness) < time.Duration(refresh)
 }
 
 func (u *ConsulUpstreams) selectTier(snapshot snapshot) (string, []string) {
