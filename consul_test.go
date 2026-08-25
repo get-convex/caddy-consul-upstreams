@@ -77,7 +77,7 @@ func request(service string) *http.Request {
 func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	u := new(ConsulUpstreams)
 	if err := u.UnmarshalCaddyfile(caddyfile.NewTestDispenser(`consul {
-		service usher
+		service api
 		locality {
 			node_meta availability-zone-id
 		}
@@ -123,7 +123,7 @@ func TestAPINodeMetaReadsConfig(t *testing.T) {
 
 func TestProvisionReadsLocalNodeMeta(t *testing.T) {
 	u := &ConsulUpstreams{
-		Service:  "usher",
+		Service:  "api",
 		client:   &fakeConsul{meta: map[string]string{"availability-zone-id": "a"}},
 		Locality: &Locality{NodeMetaKey: "availability-zone-id"},
 	}
@@ -160,7 +160,7 @@ func TestCacheRefreshResetGraceAndEmpty(t *testing.T) {
 	}
 	f.set([]*api.ServiceEntry{instance("10.0.0.1", "", 80, nil)}, nil)
 	u := testModule(f)
-	r := request("usher")
+	r := request("api")
 	if _, err := u.GetUpstreams(r); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestCacheRefreshResetGraceAndEmpty(t *testing.T) {
 	}
 
 	u.mu.Lock()
-	u.entries["usher"] = cacheEntry{snapshot: snapshot{}, freshness: time.Now().Add(-time.Hour), hasResult: true}
+	u.entries["api"] = cacheEntry{snapshot: snapshot{}, freshness: time.Now().Add(-time.Hour), hasResult: true}
 	u.mu.Unlock()
 	f.set(nil, nil)
 	got, err = u.GetUpstreams(r)
@@ -186,7 +186,7 @@ func TestCacheRefreshResetGraceAndEmpty(t *testing.T) {
 	}
 
 	u.mu.Lock()
-	u.entries["usher"] = cacheEntry{snapshot: snapshot{all: []string{"10.0.0.1:80"}}, freshness: time.Now().Add(-time.Hour), hasResult: true}
+	u.entries["api"] = cacheEntry{snapshot: snapshot{all: []string{"10.0.0.1:80"}}, freshness: time.Now().Add(-time.Hour), hasResult: true}
 	u.mu.Unlock()
 	f.set(nil, errors.New("unavailable"))
 	got, err = u.GetUpstreams(r)
@@ -207,7 +207,7 @@ func TestConcurrentFirstRefreshIsSingle(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			if _, err := u.GetUpstreams(request("usher")); err != nil {
+			if _, err := u.GetUpstreams(request("api")); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -227,7 +227,7 @@ func TestLocalitySelectionRefreshesOnReset(t *testing.T) {
 	}}
 	u := testModule(f)
 	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", Minimum: 2}
-	r := request("usher")
+	r := request("api")
 	got, err := u.GetUpstreams(r)
 	if err != nil || len(got) != 2 || tier(r) != "local" {
 		t.Fatalf("local: %v %v %q", got, err, tier(r))

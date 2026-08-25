@@ -2,7 +2,7 @@
 	reverse_proxy {
 		dynamic consul {
 			address http://127.0.0.1:8500
-			service {usher_service}
+			service {service_name}
 			refresh 10s
 			grace_period 30s
 			locality {

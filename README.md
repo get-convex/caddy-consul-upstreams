@@ -23,7 +23,7 @@ example.com {
 	reverse_proxy {
 		dynamic consul {
 			address http://127.0.0.1:8500
-			service {usher_service}
+			service {service_name}
 			refresh 10s
 			grace_period 30s
 			locality {
@@ -45,7 +45,7 @@ example.com {
 {
   "source": "consul",
   "address": "http://127.0.0.1:8500",
-  "service": "usher",
+  "service": "api",
   "refresh": 10000000000,
   "grace_period": 30000000000,
   "locality": {
@@ -64,10 +64,11 @@ refresh.
 
 With locality, the module reads the configured local metadata from the Consul
 agent's `Config.NodeMeta` during provisioning. For example, a Caddy instance
-in AZ `a` with passing Ushers in `a`, `a`, `b`, and `c` uses only the two `a`
-instances when `minimum` is 2. If fewer than two `a` instances are passing, it
-uses all passing instances. Missing target metadata is nonlocal; missing local
-metadata fails provisioning. Retries re-query Consul and apply the same rule.
+in AZ `a` with passing service instances in `a`, `a`, `b`, and `c` uses only
+the two `a` instances when `minimum` is 2. If fewer than two `a` instances are
+passing, it uses all passing instances. Missing target metadata is nonlocal;
+missing local metadata fails provisioning. Retries re-query Consul and apply
+the same rule.
 
 The request placeholder `{http.reverse_proxy.upstreams.consul.tier}` is either
 `local` or `all`.
