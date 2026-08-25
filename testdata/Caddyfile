@@ -8,7 +8,6 @@
 			locality {
 				node_meta availability-zone-id
 				minimum 2
-				fallback_on_retry
 			}
 		}
 	}

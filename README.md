@@ -29,7 +29,6 @@ example.com {
 			locality {
 				node_meta availability-zone-id
 				minimum 2
-				fallback_on_retry
 			}
 		}
 	}
@@ -50,9 +49,8 @@ example.com {
   "refresh": 10000000000,
   "grace_period": 30000000000,
   "locality": {
-    "node_meta_key": "availability-zone-id",
-    "minimum_preferred": 2,
-    "fallback_on_retry": true
+    "node_meta": "availability-zone-id",
+    "minimum": 2
   }
 }
 ```
@@ -65,18 +63,14 @@ exists, `grace_period` continues serving that result before attempting another
 refresh.
 
 With locality, the module reads the configured local metadata from the Consul
-agent's `Config.NodeMeta` during provisioning. If at least `minimum` passing
-instances have the same metadata, normal attempts use only those instances.
-Otherwise all passing instances are returned. Missing target metadata is
-nonlocal; missing local metadata fails provisioning.
+agent's `Config.NodeMeta` during provisioning. For example, a Caddy instance
+in AZ `a` with passing Ushers in `a`, `a`, `b`, and `c` uses only the two `a`
+instances when `minimum` is 2. If fewer than two `a` instances are passing, it
+uses all passing instances. Missing target metadata is nonlocal; missing local
+metadata fails provisioning. Retries re-query Consul and apply the same rule.
 
-`fallback_on_retry` makes a retry after Caddy calls `ResetCache` select only
-nonlocal passing instances when the previous selection was `preferred`. If
-there are no nonlocal instances, it remains on the preferred pool. A retry
-following `all`, `fallback`, or `retry_fallback` preserves that tier.
-
-The request placeholder `{http.reverse_proxy.upstreams.consul.tier}` is one of
-`all`, `preferred`, `fallback`, or `retry_fallback`.
+The request placeholder `{http.reverse_proxy.upstreams.consul.tier}` is either
+`local` or `all`.
 
 ## Scope
 

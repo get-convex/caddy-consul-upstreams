@@ -24,7 +24,6 @@ import (
 const (
 	moduleID        = "http.reverse_proxy.upstreams.consul"
 	tierPlaceholder = "http.reverse_proxy.upstreams.consul.tier"
-	retryVar        = "consul_upstreams_retry_fallback"
 )
 
 // ConsulUpstreams discovers passing service instances through Consul.
@@ -43,9 +42,8 @@ type ConsulUpstreams struct {
 
 // Locality controls local-node preference.
 type Locality struct {
-	NodeMetaKey      string `json:"node_meta_key,omitempty"`
-	MinimumPreferred int    `json:"minimum_preferred,omitempty"`
-	FallbackOnRetry  bool   `json:"fallback_on_retry,omitempty"`
+	NodeMetaKey      string `json:"node_meta,omitempty"`
+	MinimumPreferred int    `json:"minimum,omitempty"`
 	localValue       string
 }
 
@@ -95,7 +93,7 @@ type cacheEntry struct {
 	hasResult bool
 }
 
-type snapshot struct{ all, preferred, fallback []string }
+type snapshot struct{ all, local []string }
 
 func init() { caddy.RegisterModule(&ConsulUpstreams{}) }
 
@@ -149,13 +147,13 @@ func (u *ConsulUpstreams) Validate() error {
 	}
 	if u.Locality != nil {
 		if strings.TrimSpace(u.Locality.NodeMetaKey) == "" {
-			return errors.New("locality.node_meta_key is required")
+			return errors.New("locality.node_meta is required")
 		}
 		if u.Locality.MinimumPreferred == 0 {
 			u.Locality.MinimumPreferred = 2
 		}
 		if u.Locality.MinimumPreferred < 1 {
-			return errors.New("locality.minimum_preferred must be at least one")
+			return errors.New("locality.minimum must be at least one")
 		}
 	}
 	return nil
@@ -178,7 +176,7 @@ func (u *ConsulUpstreams) GetUpstreams(r *http.Request) ([]*reverseproxy.Upstrea
 		}
 	}
 
-	tier, dials := u.selectTier(r, entry.snapshot)
+	tier, dials := u.selectTier(entry.snapshot)
 	setTier(r, tier)
 	return upstreams(dials), nil
 }
@@ -226,17 +224,14 @@ func (entry cacheEntry) isFresh(refresh caddy.Duration) bool {
 	return entry.hasResult && time.Since(entry.freshness) < time.Duration(refresh)
 }
 
-func (u *ConsulUpstreams) selectTier(r *http.Request, snapshot snapshot) (string, []string) {
+func (u *ConsulUpstreams) selectTier(snapshot snapshot) (string, []string) {
 	if u.Locality == nil {
 		return "all", snapshot.all
 	}
-	if len(snapshot.preferred) < u.Locality.MinimumPreferred {
-		return "fallback", snapshot.all
+	if len(snapshot.local) >= u.Locality.MinimumPreferred {
+		return "local", snapshot.local
 	}
-	if retryFallback(r) && u.Locality.FallbackOnRetry && len(snapshot.fallback) > 0 {
-		return "retry_fallback", snapshot.fallback
-	}
-	return "preferred", snapshot.preferred
+	return "all", snapshot.all
 }
 
 func (u *ConsulUpstreams) ResetCache(r *http.Request) error {
@@ -253,7 +248,6 @@ func (u *ConsulUpstreams) ResetCache(r *http.Request) error {
 		u.entries[service] = entry
 	}
 	u.mu.Unlock()
-	setRetryFallback(r, retryFallback(r) || tier(r) == "preferred")
 	return nil
 }
 
@@ -278,9 +272,7 @@ func (u *ConsulUpstreams) makeSnapshot(entries []*api.ServiceEntry) snapshot {
 		seen[dial] = struct{}{}
 		result.all = append(result.all, dial)
 		if u.Locality != nil && entry.Node.Meta[u.Locality.NodeMetaKey] == u.Locality.localValue {
-			result.preferred = append(result.preferred, dial)
-		} else {
-			result.fallback = append(result.fallback, dial)
+			result.local = append(result.local, dial)
 		}
 	}
 	return result
@@ -318,15 +310,6 @@ func setTier(r *http.Request, value string) {
 	if repl, ok := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer); ok {
 		repl.Set(tierPlaceholder, value)
 	}
-}
-
-func retryFallback(r *http.Request) bool {
-	value, _ := caddyhttp.GetVar(r.Context(), retryVar).(bool)
-	return value
-}
-
-func setRetryFallback(r *http.Request, value bool) {
-	caddyhttp.SetVar(r.Context(), retryVar, value)
 }
 
 func (u *ConsulUpstreams) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
@@ -385,11 +368,6 @@ func (u *ConsulUpstreams) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if d.NextArg() {
 						return d.ArgErr()
 					}
-				case "fallback_on_retry":
-					if d.NextArg() {
-						return d.ArgErr()
-					}
-					u.Locality.FallbackOnRetry = true
 				default:
 					return d.Errf("unrecognized locality option %q", d.Val())
 				}

@@ -80,12 +80,11 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 		service usher
 		locality {
 			node_meta availability-zone-id
-			fallback_on_retry
 		}
 	}`)); err != nil {
 		t.Fatal(err)
 	}
-	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.MinimumPreferred != 2 || !u.Locality.FallbackOnRetry {
+	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.MinimumPreferred != 2 {
 		t.Fatalf("unexpected defaults: %#v", u)
 	}
 	if err := (&ConsulUpstreams{}).Validate(); err == nil {
@@ -148,8 +147,8 @@ func TestAddressesUseServiceAddressAndKeepOrder(t *testing.T) {
 	if got, want := snapshot.all, []string{"10.0.0.1:80", "service.internal:443", "[2001:db8::1]:443"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("all: got %v, want %v", got, want)
 	}
-	if got, want := snapshot.preferred, []string{"10.0.0.1:80"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("preferred: got %v, want %v", got, want)
+	if got, want := snapshot.local, []string{"10.0.0.1:80"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("local: got %v, want %v", got, want)
 	}
 }
 
@@ -219,50 +218,38 @@ func TestConcurrentFirstRefreshIsSingle(t *testing.T) {
 	}
 }
 
-func TestLocalityTiersAndRetry(t *testing.T) {
+func TestLocalitySelectionRefreshesOnReset(t *testing.T) {
 	f := &fakeConsul{entries: []*api.ServiceEntry{
 		instance("10.0.0.1", "", 80, map[string]string{"az": "a"}),
 		instance("10.0.0.2", "", 80, map[string]string{"az": "a"}),
 		instance("10.0.1.1", "", 80, map[string]string{"az": "b"}),
+		instance("10.0.2.1", "", 80, map[string]string{"az": "c"}),
 	}}
 	u := testModule(f)
-	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", MinimumPreferred: 2, FallbackOnRetry: true}
+	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", MinimumPreferred: 2}
 	r := request("usher")
 	got, err := u.GetUpstreams(r)
-	if err != nil || len(got) != 2 || tier(r) != "preferred" {
-		t.Fatalf("preferred: %v %v %q", got, err, tier(r))
+	if err != nil || len(got) != 2 || tier(r) != "local" {
+		t.Fatalf("local: %v %v %q", got, err, tier(r))
 	}
 	repl := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
-	if got := repl.ReplaceAll("{http.reverse_proxy.upstreams.consul.tier}", ""); got != "preferred" {
+	if got := repl.ReplaceAll("{http.reverse_proxy.upstreams.consul.tier}", ""); got != "local" {
 		t.Fatalf("placeholder: got %q", got)
 	}
+	f.set([]*api.ServiceEntry{
+		instance("10.0.0.1", "", 80, map[string]string{"az": "a"}),
+		instance("10.0.1.1", "", 80, map[string]string{"az": "b"}),
+		instance("10.0.2.1", "", 80, map[string]string{"az": "c"}),
+	}, nil)
 	if err := u.ResetCache(r); err != nil {
 		t.Fatal(err)
 	}
 	got, err = u.GetUpstreams(r)
-	if err != nil || len(got) != 1 || got[0].Dial != "10.0.1.1:80" || tier(r) != "retry_fallback" {
-		t.Fatalf("retry fallback: %v %v %q", got, err, tier(r))
+	if err != nil || len(got) != 3 || tier(r) != "all" {
+		t.Fatalf("all: %v %v %q", got, err, tier(r))
 	}
-	if err := u.ResetCache(r); err != nil {
-		t.Fatal(err)
-	}
-	got, err = u.GetUpstreams(r)
-	if err != nil || len(got) != 1 || got[0].Dial != "10.0.1.1:80" || tier(r) != "retry_fallback" {
-		t.Fatalf("sticky retry fallback: %v %v %q", got, err, tier(r))
-	}
-
-	u.Locality.MinimumPreferred = 3
-	undersized := request("undersized")
-	got, err = u.GetUpstreams(undersized)
-	if err != nil || len(got) != 3 || tier(undersized) != "fallback" {
-		t.Fatalf("undersized locality: %v %v %q", got, err, tier(undersized))
-	}
-	if err := u.ResetCache(undersized); err != nil {
-		t.Fatal(err)
-	}
-	got, err = u.GetUpstreams(undersized)
-	if err != nil || len(got) != 3 || tier(undersized) != "fallback" {
-		t.Fatalf("undersized retry: %v %v %q", got, err, tier(undersized))
+	if got := repl.ReplaceAll("{http.reverse_proxy.upstreams.consul.tier}", ""); got != "all" {
+		t.Fatalf("placeholder after reset: got %q", got)
 	}
 }
 
