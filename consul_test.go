@@ -20,13 +20,10 @@ import (
 
 type fakeConsul struct {
 	mu      sync.Mutex
-	meta    map[string]string
 	entries []*api.ServiceEntry
 	err     error
 	calls   int
 }
-
-func (f *fakeConsul) NodeMeta() (map[string]string, error) { return f.meta, nil }
 
 func (f *fakeConsul) Service(context.Context, string) ([]*api.ServiceEntry, error) {
 	f.mu.Lock()
@@ -80,11 +77,12 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 		service api
 		locality {
 			node_meta availability-zone-id
+			local_value a
 		}
 	}`)); err != nil {
 		t.Fatal(err)
 	}
-	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.Minimum != 2 {
+	if u.Address != "http://127.0.0.1:8500" || time.Duration(u.Refresh) != time.Minute || u.GracePeriod != 0 || u.Locality.LocalValue != "a" || u.Locality.Minimum != 2 {
 		t.Fatalf("unexpected defaults: %#v", u)
 	}
 	if err := (&ConsulUpstreams{}).Validate(); err == nil {
@@ -93,17 +91,38 @@ func TestCaddyfileDefaultsAndValidation(t *testing.T) {
 	if err := (&ConsulUpstreams{Service: "x", Refresh: -1}).Validate(); err == nil {
 		t.Fatal("negative refresh accepted")
 	}
-	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az", Minimum: -1}}).Validate(); err == nil {
+	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az"}}).Validate(); err == nil {
+		t.Fatal("missing locality value accepted")
+	}
+	if err := (&ConsulUpstreams{Service: "x", Locality: &Locality{NodeMetaKey: "az", LocalValue: "a", Minimum: -1}}).Validate(); err == nil {
 		t.Fatal("invalid locality minimum accepted")
+	}
+}
+
+func TestProvisionDoesNotQueryConsul(t *testing.T) {
+	f := &fakeConsul{}
+	u := &ConsulUpstreams{
+		Service:  "api",
+		client:   f,
+		Locality: &Locality{NodeMetaKey: "az", LocalValue: "a"},
+	}
+	if err := u.Provision(caddy.Context{Context: context.Background()}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.callCount(); calls != 0 {
+		t.Fatalf("provision queried Consul %d times", calls)
 	}
 }
 
 func TestConsulClientUsesAddressSchemeAndPrefix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/prefix/v1/agent/self" {
+		if r.URL.Path != "/prefix/v1/health/service/api" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"Config":{"NodeMeta":{"availability-zone-id":"a"}},"Member":{"Tags":{"availability-zone-id":"wrong"}}}`))
+		if r.URL.Query().Get("passing") != "1" {
+			t.Fatalf("unexpected query %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer server.Close()
 	t.Setenv("CONSUL_HTTP_SSL", "true")
@@ -111,12 +130,12 @@ func TestConsulClientUsesAddressSchemeAndPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := (apiClient{client}).NodeMeta()
+	entries, err := (apiClient{client}).Service(context.Background(), "api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta["availability-zone-id"] != "a" {
-		t.Fatalf("got %#v", meta)
+	if len(entries) != 0 {
+		t.Fatalf("got %#v", entries)
 	}
 }
 
@@ -130,31 +149,13 @@ func TestConsulClientTimeoutBoundsCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if _, err := (apiClient{client}).NodeMeta(); err == nil || time.Since(start) > time.Second {
-		t.Fatalf("Agent.Self was not bounded: %v", err)
-	}
-	start = time.Now()
 	if _, err := (apiClient{client}).Service(context.Background(), "api"); err == nil || time.Since(start) > time.Second {
 		t.Fatalf("Health.Service was not bounded: %v", err)
 	}
 }
 
-func TestProvisionReadsLocalNodeMeta(t *testing.T) {
-	u := &ConsulUpstreams{
-		Service:  "api",
-		client:   &fakeConsul{meta: map[string]string{"availability-zone-id": "a"}},
-		Locality: &Locality{NodeMetaKey: "availability-zone-id"},
-	}
-	if err := u.Provision(caddy.Context{Context: context.Background()}); err != nil {
-		t.Fatal(err)
-	}
-	if u.Locality.localValue != "a" {
-		t.Fatalf("got local metadata %q", u.Locality.localValue)
-	}
-}
-
 func TestAddressesUseServiceAddressAndKeepOrder(t *testing.T) {
-	u := &ConsulUpstreams{Locality: &Locality{NodeMetaKey: "az", localValue: "a"}}
+	u := &ConsulUpstreams{Locality: &Locality{NodeMetaKey: "az", LocalValue: "a"}}
 	snapshot := u.makeSnapshot([]*api.ServiceEntry{
 		instance("10.0.0.1", "", 80, map[string]string{"az": "a"}),
 		instance("10.0.0.2", "service.internal", 443, map[string]string{"az": "b"}),
@@ -244,7 +245,7 @@ func TestLocalitySelectionRefreshesOnReset(t *testing.T) {
 		instance("10.0.2.1", "", 80, map[string]string{"az": "c"}),
 	}}
 	u := testModule(f)
-	u.Locality = &Locality{NodeMetaKey: "az", localValue: "a", Minimum: 2}
+	u.Locality = &Locality{NodeMetaKey: "az", LocalValue: "a", Minimum: 2}
 	r := request("api")
 	got, err := u.GetUpstreams(r)
 	if err != nil || len(got) != 2 || tier(r) != "local" {

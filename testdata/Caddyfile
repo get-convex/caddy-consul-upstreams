@@ -7,6 +7,7 @@
 			grace_period 30s
 			locality {
 				node_meta availability-zone-id
+				local_value az-a
 				minimum 2
 			}
 		}

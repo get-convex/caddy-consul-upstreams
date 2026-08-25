@@ -44,44 +44,15 @@ type ConsulUpstreams struct {
 // Locality controls local-node preference.
 type Locality struct {
 	NodeMetaKey string `json:"node_meta,omitempty"`
+	LocalValue  string `json:"local_value,omitempty"`
 	Minimum     int    `json:"minimum,omitempty"`
-	localValue  string
 }
 
 type consulClient interface {
-	NodeMeta() (map[string]string, error)
 	Service(context.Context, string) ([]*api.ServiceEntry, error)
 }
 
 type apiClient struct{ c *api.Client }
-
-func (a apiClient) NodeMeta() (map[string]string, error) {
-	self, err := a.c.Agent().Self()
-	if err != nil {
-		return nil, err
-	}
-	config, ok := self["Config"]
-	if !ok {
-		return nil, errors.New("response has no Config section")
-	}
-	value, ok := config["NodeMeta"]
-	if !ok {
-		return nil, errors.New("response has no Config.NodeMeta")
-	}
-	meta, ok := value.(map[string]interface{})
-	if !ok {
-		return nil, errors.New("Config.NodeMeta is not an object")
-	}
-	result := make(map[string]string, len(meta))
-	for key, value := range meta {
-		text, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("Config.NodeMeta[%q] is not a string", key)
-		}
-		result[key] = text
-	}
-	return result, nil
-}
 
 func (a apiClient) Service(ctx context.Context, service string) ([]*api.ServiceEntry, error) {
 	entries, _, err := a.c.Health().Service(service, "", true, (&api.QueryOptions{}).WithContext(ctx))
@@ -113,16 +84,6 @@ func (u *ConsulUpstreams) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("creating Consul client: %w", err)
 		}
 		u.client = apiClient{client}
-	}
-	if u.Locality != nil {
-		meta, err := u.client.NodeMeta()
-		if err != nil {
-			return fmt.Errorf("reading local Consul node metadata: %w", err)
-		}
-		u.Locality.localValue = meta[u.Locality.NodeMetaKey]
-		if u.Locality.localValue == "" {
-			return fmt.Errorf("local Consul node metadata %q is missing or empty", u.Locality.NodeMetaKey)
-		}
 	}
 	return nil
 }
@@ -159,6 +120,9 @@ func (u *ConsulUpstreams) Validate() error {
 	if u.Locality != nil {
 		if strings.TrimSpace(u.Locality.NodeMetaKey) == "" {
 			return errors.New("locality.node_meta is required")
+		}
+		if strings.TrimSpace(u.Locality.LocalValue) == "" {
+			return errors.New("locality.local_value is required")
 		}
 		if u.Locality.Minimum == 0 {
 			u.Locality.Minimum = 2
@@ -281,7 +245,7 @@ func (u *ConsulUpstreams) makeSnapshot(entries []*api.ServiceEntry) snapshot {
 		}
 		seen[dial] = struct{}{}
 		result.all = append(result.all, dial)
-		if u.Locality != nil && entry.Node.Meta[u.Locality.NodeMetaKey] == u.Locality.localValue {
+		if u.Locality != nil && entry.Node.Meta[u.Locality.NodeMetaKey] == u.Locality.LocalValue {
 			result.local = append(result.local, dial)
 		}
 	}
@@ -363,6 +327,14 @@ func (u *ConsulUpstreams) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 						return d.ArgErr()
 					}
 					u.Locality.NodeMetaKey = d.Val()
+					if d.NextArg() {
+						return d.ArgErr()
+					}
+				case "local_value":
+					if !d.NextArg() {
+						return d.ArgErr()
+					}
+					u.Locality.LocalValue = d.Val()
 					if d.NextArg() {
 						return d.ArgErr()
 					}

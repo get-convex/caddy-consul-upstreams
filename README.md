@@ -9,12 +9,12 @@ does not generate routes or configure Consul.
 Build Caddy with [xcaddy](https://github.com/caddyserver/xcaddy):
 
 ```sh
-xcaddy build v2.11.4 --with github.com/get-convex/caddy-consul-upstreams@v0.1.0
+xcaddy build v2.11.4 --with github.com/get-convex/caddy-consul-upstreams@v0.1.1
 ```
 
-For local development, replace `@v0.1.0` with `=.`.
+For local development, replace `@v0.1.1` with `=.`.
 
-v0.1 is compatible with Caddy 2.11.4.
+v0.1.1 is compatible with Caddy 2.11.4.
 
 ## Caddyfile
 
@@ -28,6 +28,7 @@ example.com {
 			grace_period 30s
 			locality {
 				node_meta availability-zone-id
+				local_value {$CADDY_AZ}
 				minimum 2
 			}
 		}
@@ -50,6 +51,7 @@ example.com {
   "grace_period": 30000000000,
   "locality": {
     "node_meta": "availability-zone-id",
+    "local_value": "a",
     "minimum": 2
   }
 }
@@ -62,18 +64,19 @@ successful empty result is authoritative. If a refresh fails and a prior result
 exists, `grace_period` continues serving that result before attempting another
 refresh.
 
-With locality, the module reads the configured local metadata from the Consul
-agent's `Config.NodeMeta` during provisioning. For example, a Caddy instance
-in AZ `a` with passing service instances in `a`, `a`, `b`, and `c` uses only
-the two `a` instances when `minimum` is 2. If fewer than two `a` instances are
-passing, it uses all passing instances. Missing target metadata is nonlocal;
-missing local metadata fails provisioning. Retries re-query Consul and apply
-the same rule.
+With locality, `node_meta` identifies the metadata field on discovered service
+nodes, and `local_value` is the required value for this Caddy instance. Caddy
+expands `{$...}` environment placeholders while adapting the Caddyfile. For
+example, a Caddy instance with `local_value a` and passing service instances in
+`a`, `a`, `b`, and `c` uses only the two `a` instances when `minimum` is 2. If
+fewer than two `a` instances are passing, it uses all passing instances.
+Missing target metadata is nonlocal. Retries re-query Consul and apply the same
+rule.
 
 The request placeholder `{http.reverse_proxy.upstreams.consul.tier}` is either
 `local` or `all`.
 
 ## Scope
 
-v0.1 intentionally has no tag locality, latency ordering, weights, WAN
+v0.1.1 intentionally has no tag locality, latency ordering, weights, WAN
 federation, arbitrary preference expressions, or custom metrics.
