@@ -1,0 +1,14 @@
+:8080 {
+	reverse_proxy {
+		dynamic consul {
+			address http://127.0.0.1:8500
+			service {service_name}
+			refresh 10s
+			grace_period 30s
+			locality {
+				node_meta availability-zone-id
+				minimum 2
+			}
+		}
+	}
+}
